@@ -469,3 +469,4 @@ def recomendar_actividades(df, provincia, categorias=None, top_n=3):
 
     return recomendadas[["NOMBRE_PRO", "TITULO", "RATING", "REVIEWS_COUNT", "score", "LINK"]]
 
+
