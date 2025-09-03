@@ -5,21 +5,32 @@ from snowflake.snowpark import Session
 from sklearn.metrics.pairwise import cosine_similarity
 import unicodedata
 
+SNOWFLAKE_CONFIG = {
+
+    "account": st.secrets["account"],
+    "user": st.secrets["user"],
+    "password": st.secrets["password"],
+    "role": st.secrets["role"],
+    "warehouse": st.secrets["warehouse"],
+    "database": st.secrets["database"],
+    "schema": st.secrets["schema"]
+}
+
 @st.cache_data
 def load_data_from_snowflake():
-    """Abre sesión, descarga tablas necesarias y cierra la sesión."""
+
     try:
-        # Cargar la configuración desde el archivo secrets.toml
-        snowflake_config = st.secrets["snowflake"]
-        with Session.builder.configs(snowflake_config).create() as sf_session:
-            st.info("✅ Conectado a Snowflake")
+        with Session.builder.configs(SNOWFLAKE_CONFIG).create() as sf_session:
+
             master_forecasted_df = sf_session.table("TUI_TFM.PROCESSED.MASTER_FORECASTED").to_pandas()
             experiencis_df = sf_session.table("TUI_TFM.PROCESSED.EXP_TUI").to_pandas()
             return experiencis_df, master_forecasted_df
+        
     except Exception as e:
+
         st.error(f"❌ Error al cargar desde Snowflake: {e}")
         return pd.DataFrame(), pd.DataFrame()
-
+        
 def normalize(text: str) -> str:
 
     return ''.join(
@@ -468,5 +479,6 @@ def recomendar_actividades(df, provincia, categorias=None, top_n=3):
     recomendadas = df_provincia.head(top_n)
 
     return recomendadas[["NOMBRE_PRO", "TITULO", "RATING", "REVIEWS_COUNT", "score", "LINK"]]
+
 
 
