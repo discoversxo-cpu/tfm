@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from recommender import (
+from streamlit_functions import (
     load_data_from_snowflake,
     build_province_month_features,
     recomendar_alternativas_stream,
