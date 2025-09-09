@@ -225,7 +225,8 @@ def build_province_month_features(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     df["geography"] = df["geography"].str.lower()
 
-    event_cols = ["HOBBIES_AND_GAMES", "ARTS_AND_SOCIETY", "SPORTS_AND_WELLNESS", "FESTIVALS", "FOOD", "FAMILY"]
+    event_cols = ["AFICIONES_Y_JUEGOS", "ARTES_Y_SOCIEDAD", "DEPORTES_Y_BIENESTAR",
+                                    "FESTIVALES", "GASTRONOMIA", "FAMILIA"]
     df["events_total"] = df[event_cols].sum(axis=1)
 
     feature_cols = [
