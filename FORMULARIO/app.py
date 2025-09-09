@@ -61,8 +61,8 @@ if __name__ == "__main__":
         preference = st.radio("¿Tienes preferencia por algún tipo de evento?", ("Sí", "No"), key='preference_radio')
         selected_events_names = []
         if preference == "Sí":
-            available_event_cols = ["HOBBIES AND GAMES", "ARTS AND SOCIETY", "SPORTS AND WELLNESS",
-                                    "FESTIVALS", "FOOD", "FAMILY"]
+            available_event_cols = ["Aficiones y juegos", "Artes y sociedad", "Deportes y bienestar",
+                                    "Festivales", "Gastronomía", "Familia"]
             selected_events_names = st.multiselect(
                 "Selecciona hasta 3 eventos:",
                 options=available_event_cols,
@@ -125,15 +125,15 @@ if __name__ == "__main__":
             min_value=temp_min, max_value=temp_max, value=(temp_min + temp_max) // 2, key='target_temp_slider'
         )
         
-        crowd_tol = st.selectbox("Tolerancia a multitudes:", ["low", "medium", "high"], key='crowd_tol_select')
-        rain_tol = st.selectbox("Tolerancia a la lluvia:", ["low", "medium", "high"], key='rain_tol_select')
-        budget_tol = st.selectbox("Presupuesto:", ["low", "medium", "high"], key='budget_tol_select')
+        crowd_tol = st.selectbox("Tolerancia a multitudes:", ["baja", "media", "alto"], key='crowd_tol_select')
+        rain_tol = st.selectbox("Tolerancia a la lluvia:", ["baja", "media", "alto"], key='rain_tol_select')
+        budget_tol = st.selectbox("Presupuesto:", ["baja", "media", "alto"], key='budget_tol_select')
         
         preference = st.radio("¿Tienes preferencia por algún tipo de evento?", ("Sí", "No"), key='preference_radio')
         selected_events_names = []
         if preference == "Sí":
-            available_event_cols = ["HOBBIES AND GAMES", "ARTS AND SOCIETY", "SPORTS AND WELLNESS",
-                                    "FESTIVALS", "FOOD", "FAMILY"]
+            available_event_cols = ["Aficiones y juegos", "Artes y sociedad", "Deportes y bienestar",
+                                    "Festivales", "Gastronomía", "Familia"]
             selected_events_names = st.multiselect(
                 "Selecciona hasta 3 eventos:",
                 options=available_event_cols,

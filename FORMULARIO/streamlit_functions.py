@@ -115,11 +115,11 @@ def categorize(value, series):
     p25, p75 = series.quantile([0.25, 0.75])
 
     if value <= p25:
-        return "low"
+        return "baja"
     elif value <= p75:
-        return "medium"
+        return "media"
     else:
-        return "high"
+        return "alta"
     
 def _alts_once(df_slice, base_row, sim_matrix, tourism_type, sim_geo_bonus, 
                top_set, target_temp, crowd_delta, temp_dev, user_drop, require_geo=True):
@@ -325,9 +325,9 @@ def recomendar_alternativas_stream(
     rain_penalty = (1 - features_df["rain_index"])
     
     tol_weights = {
-        "crowd":{"low":0.5,"medium":0.30,"high":0}.get(crowd,0.30),
-        "rain":{"low":0.5,"medium":0.30,"high":0}.get(rain,0.30),
-        "price":{"low":0.5,"medium":0.30,"high":0.1}.get(budget,0.30)
+        "crowd":{"baja":0.5,"media":0.30,"alta":0}.get(crowd,0.30),
+        "rain":{"baja":0.5,"media":0.30,"alta":0}.get(rain,0.30),
+        "price":{"baja":0.5,"media":0.30,"alta":0.1}.get(budget,0.30)
     }
     
     tol_comp = (
