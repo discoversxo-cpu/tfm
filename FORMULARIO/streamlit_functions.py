@@ -315,11 +315,11 @@ def recomendar_alternativas_stream(
 
     event_signal = sum(features_df.get(ev, pd.Series(0, index=features_df.index)) * w for ev, w in event_weights.items())
     
-    offer_cols = ["establishments", "n_beds", "employees"]
+    offer_cols = ["establishments_index", "n_beds_index", "employees_index"]
     
     event_index = norm_0_1(np.log1p(event_signal.astype(float)))
     temp_score = np.exp(-((features_df["mean_temp"] - float(target_temp)).abs() / 4.0))
-    offer_score = norm_0_1(features_df[offer_cols].sum(axis=1))
+    offer_score = features_df[offer_cols].sum(axis=1)
     
     crowd_penalty = (1 - features_df["crowd_index"])
     price_penalty = (1 - features_df["price_index"])
