@@ -9,6 +9,18 @@ MODEL = "gemma3:4b"
 st.set_page_config(page_title="Chat con Ollama", page_icon="💬")
 st.title("💬 Chat con Ollama")
 
+# --- Instrucciones para el usuario ---
+st.markdown("""
+<div style='background-color:#e0f7fa; padding:15px; border-radius:12px; margin-bottom:15px; font-size:14px; line-height:1.5;'>
+<b>🌟 Bienvenido al Chat de Viajes 🌟</b><br><br>
+👋 Saluda a nuestro asistente para empezar.<br>
+✈️ Responde a las preguntas para planear tu viaje de manera fácil y divertida.<br>
+💡 Puedes elegir las opciones sugeridas o escribir tu respuesta directamente.<br>
+📝 El chat recordará tus elecciones y te guiará paso a paso hasta completar tu plan de viaje.<br>
+🎉 ¡Disfruta la experiencia y prepárate para descubrir tu próxima aventura!
+</div>
+""", unsafe_allow_html=True)
+
 # --- CSS moderno tipo app de mensajería ---
 st.markdown("""
 <style>
@@ -34,7 +46,7 @@ div[data-testid="stChatMessageList"] {
 
 /* Mensajes del usuario */
 .user-msg {
-    background-color: #00bfa5;
+    background-color: #80cbc4;
     color: white;
     text-align: right;
     padding: 12px 20px;
@@ -122,7 +134,7 @@ def mes_options():
 
 # --- Definir flujo de campos y opciones ---
 fields_info = {
-    "anio": {"options": ["2025", "2026"], "prompt": "¿En qué año planeas tu viaje?"},
+    "anio": {"options": ["2025", "2026"], "prompt": "¿En qué año planeas viajar?"},
     "mes": {"options": mes_options, "prompt": "¿En qué mes planeas viajar?"},
     "preferencias_eventos": {
         "options": ["aficiones y juegos", "artes y sociedad", "deportes y bienestar",
