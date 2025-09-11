@@ -1,13 +1,32 @@
-import streamlit as st 
+import streamlit as st
+import traceback
 import requests
 import json
-import time  # Para animación de bot escribiendo
+import time
+from streamlit_functions import load_data_from_snowflake, unificado, _geo_mask
+import pandas as pd
+
+# --- Cargar datos desde Snowflake ---
+experiencias_df, master_forecasted_df = load_data_from_snowflake()
+
+if experiencias_df.empty and  master_forecasted_df.empty:
+    st.warning("⚠️ No se pudieron cargar los datos")
+
+if "experiencias_df" not in st.session_state:
+    st.session_state.experiencias_df = experiencias_df
+    st.session_state.master_forecasted_df = master_forecasted_df
+
+if "province_month_df" not in st.session_state:
+    st.session_state.province_month_df = pd.DataFrame()
+
+if "complete_slice_df" not in st.session_state:
+    st.session_state.complete_slice_df = pd.DataFrame()
 
 OLLAMA_API_URL = "http://localhost:11434"
 MODEL = "gemma3:4b"
 
-st.set_page_config(page_title="Chat con Ollama", page_icon="💬")
-st.title("💬 Chat con Ollama")
+st.set_page_config(page_title="Chat con Discover", page_icon="💬")
+st.title("💬 Chatea con Discover")
 
 # --- Instrucciones para el usuario ---
 st.markdown("""
@@ -126,24 +145,38 @@ if "started" not in st.session_state:
     st.session_state.started = False
 
 # --- Función para definir opciones dinámicas de mes ---
-def mes_options():
+def mes_opciones():
     if st.session_state.json_data.get("anio") == "2025":
         return ["julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
     else:
         return ["enero", "febrero", "marzo", "abril", "mayo", "junio"]
+    
+def provincia_opciones():
+    if "complete_slice_df" in st.session_state:
+        df = st.session_state.province_month_df
+        return sorted(df["province"].dropna().unique()) + ["none"]
+    return []
+
+def temperatura_opciones():
+    if "complete_slice_df" in st.session_state:
+        df = st.session_state.province_month_df
+        temp_min = round(df["mean_temp"].min())
+        temp_max = round(df["mean_temp"].max())
+        return [str(i) for i in range(int(temp_min), int(temp_max)+1)] + ["none"]
+    return []
 
 # --- Definir flujo de campos y opciones ---
 fields_info = {
-    "anio": {"options": ["2025", "2026"], "prompt": "¿En qué año planeas viajar?"},
-    "mes": {"options": mes_options, "prompt": "¿En qué mes planeas viajar?"},
-    "preferencias_eventos": {
+    "anio": {"options": ["2025", "2026"], "prompt": "¿En qué año quieres viajar?"},
+    "mes": {"options": mes_opciones, "prompt": "¿En qué mes planeas viajar?"},
+    "preferencias_experiencias": {
         "options": ["aficiones y juegos", "artes y sociedad", "deportes y bienestar",
-                    "festivales", "gastronomía", "familia", "sin preferencia"],
-        "prompt": "Elige hasta 3 eventos que te interesen"
+                    "festivales", "gastronomia", "familia", "none"],
+        "prompt": "Elige hasta 3 experiencias que te interesen"
     },
-    "provincia_base": {"options": None, "prompt": "¿En qué provincia te gustaría viajar?"},
-    "tipo_geografia": {"options": ["playa", "montaña", "urbano", "mixto"], "prompt": "¿Qué tipo de geografia prefieres?"},
-    "temperatura": {"options": ["calor", "frío", "templado", "sin preferencia"], "prompt": "¿Qué clima prefieres?"},
+    "provincia_base": {"options": provincia_opciones, "prompt": "¿En qué provincia te gustaría viajar?"},
+    "tipo_geografia": {"options": ["playa", "montaña", "urbano", "mixto","none"], "prompt": "¿Qué tipo de geografia prefieres?"},
+    "temperatura": {"options": temperatura_opciones, "prompt": "¿Qué clima prefieres?"},
     "tolerancia_multitudes": {"options": ["baja", "media", "alta"], "prompt": "¿Qué tolerancia tienes a las multitudes?"},
     "tolerancia_lluvia": {"options": ["baja", "media", "alta"], "prompt": "¿Qué tolerancia tienes a la lluvia?"},
     "presupuesto": {"options": ["baja", "media", "alta"], "prompt": "¿Cuál es tu presupuesto?"},
@@ -161,10 +194,10 @@ normalization_rules = {
         "Devuelve el mes como número (ejemplo: enero→1). "
         "Si no coincide, devuelve 'none'."
     ),
-    "preferencias_eventos": (
-        "El usuario puede mencionar uno o varios eventos (máximo 3). "
+    "preferencias_experiencias": (
+        "El usuario puede mencionar uno o varias experiencias (máximo 3). "
         "Mapea cada uno a solo una opcion de las siguientes: aficiones y juegos, artes y sociedad, "
-        "deportes y bienestar, festivales, gastronomía, familia. "
+        "deportes y bienestar, festivales, gastronomia, familia. "
         "Devuelve únicamente los que mencionó, en minúsculas y separados por comas. "
         "Si no hay coincidencias, devuelve 'none'."),
     "provincia_base": (
@@ -179,7 +212,7 @@ normalization_rules = {
         "Si no se puede mapear claramente, devuelve 'none'."
     ),
     "temperatura": (
-        "Mapea la respuesta a uno de estos valores: calor, frío, templado, sin preferencia. "
+        "asegurate de que la respuesta este dentro del rango de temperaturas disponibles. "
         "Si no coincide claramente, devuelve 'none'."
     ),
     "tolerancia_multitudes": "Analiza todo el contexto de la respuesta del usuario y mapea la respuesta a: baja, media o alta. Si no se puede, devuelve 'none'.",
@@ -252,7 +285,7 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                 field_options = field_options()
             field_options_lower = [opt.lower() for opt in field_options] if field_options else None
 
-            if current_field == "preferencias_eventos":
+            if current_field == "preferencias_experiencias":
                 # Separar lo que devolvió el modelo en lista
                 valores = [v.strip() for v in normalized_value.split(",") if v.strip()]
                 # Filtrar solo los que están en las opciones válidas
@@ -277,7 +310,7 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                     st.stop()
 
                 else:
-                    # Guardar los eventos válidos como lista separada por comas
+                    # Guardar los experiencias válidas como lista separada por comas
                     st.session_state.json_data[current_field] = ", ".join(valid_values[:3])
                     # --- Avanzar al siguiente campo (igual que antes) ---
                     fields_order = list(fields_info.keys())
@@ -305,26 +338,70 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                     else:
                         answer = json.dumps(st.session_state.json_data, ensure_ascii=False, indent=2)
 
-            else:
-                # Validación normal para los demás campos
-                if field_options_lower and normalized_value not in field_options_lower:
-                    options_str = ", ".join(field_options_lower)
-                    answer = (
-                        f"Disculpa, el valor que ingresaste no es válido. "
-                        f"Por favor elige una opción de las siguientes: {options_str}."
-                    )
-                    st.session_state.current_field = current_field
-                    # Mostrar inmediatamente en el chat
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                    writing_placeholder.markdown(
-                        f"<div class='assistant-msg'>{answer}</div>",
-                        unsafe_allow_html=True
-                    )
-                    # Detener la ejecución para esperar la respuesta del usuario
-                    st.stop()
+            elif field_options_lower and normalized_value not in field_options_lower and current_field == "provincia_base":
 
-                else:
-                    st.session_state.json_data[current_field] = normalized_value
+                options_str = ", ".join(field_options_lower)
+                answer = (
+                    f"Disculpa, la provincia que ingresaste no es válido. "
+                    f"Por favor elige una de las 52 provincias de españa. "
+                )
+                st.session_state.current_field = current_field
+                # Mostrar inmediatamente en el chat
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+                writing_placeholder.markdown(
+                    f"<div class='assistant-msg'>{answer}</div>",
+                    unsafe_allow_html=True
+                )
+                # Detener la ejecución para esperar la respuesta del usuario
+                st.stop()
+
+            elif field_options_lower and normalized_value not in field_options_lower:
+                options_str = ", ".join(field_options_lower)
+                answer = (
+                    f"Disculpa, el valor que ingresaste no es válido. "
+                    f"Por favor elige una opción de las siguientes: {options_str}."
+                )
+                st.session_state.current_field = current_field
+                # Mostrar inmediatamente en el chat
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+                writing_placeholder.markdown(
+                    f"<div class='assistant-msg'>{answer}</div>",
+                    unsafe_allow_html=True
+                )
+                # Detener la ejecución para esperar la respuesta del usuario
+                st.stop()
+
+            else:
+                st.session_state.json_data[current_field] = normalized_value
+
+                anio_val = st.session_state.json_data.get("anio")
+                mes_val = st.session_state.json_data.get("mes")
+                geografia_val = st.session_state.json_data.get("tipo_geografia")
+                temp_val = st.session_state.json_data.get("temperatura")
+
+                if anio_val and mes_val:
+
+                    meses_dict = {
+                        "enero":1, "febrero":2, "marzo":3, "abril":4, "mayo":5, "junio":6,
+                        "julio":7, "agosto":8, "septiembre":9, "octubre":10, "noviembre":11, "diciembre":12
+                    }
+                    mes_num = meses_dict[mes_val.lower()]
+
+                    period = pd.Period(f"{anio_val}-{mes_num}", freq="M")
+
+                    filtered_df = master_forecasted_df[master_forecasted_df["year_month"] == period].copy()
+
+                    st.session_state.province_month_df = filtered_df.copy()
+                    st.session_state.complete_slice_df = filtered_df.copy()
+
+                elif geografia_val:
+                    mask_geo = _geo_mask(st.session_state.province_month_df["geography"], geografia_val)
+                    province_month_df = st.session_state.province_month_df[mask_geo]
+                    if province_month_df.empty:
+                        st.warning("EMPTY do to tourism_type") 
+                    
+                elif temp_val:
+                    st.session_state.province_month_df = st.session_state.province_month_df[st.session_state.province_month_df["mean_temp"] <= int(temp_val)].copy()
 
                 # --- Verificar provincia_base y asignar modo_chat ---
                 if current_field == "provincia_base":
@@ -340,7 +417,9 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                             if field in ["tipo_geografia", "temperatura", "tolerancia_multitudes", "tolerancia_lluvia", "presupuesto"]:
                                 st.session_state.json_data[field] = "none"
                     st.session_state.current_field = None
-                    answer = json.dumps(st.session_state.json_data, ensure_ascii=False, indent=2)
+                    st.session_state.final_json = st.session_state.json_data.copy()
+
+                    answer = """✅ He guardado toda la información de tu viaje. Ahora puedo recomendarte experiencias personalizadas."""
                 else:
                     # Avanzar al siguiente campo
                     fields_order = list(fields_info.keys())
@@ -367,7 +446,12 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                         )
                         answer = response.json()["choices"][0]["message"]["content"]
                     else:
-                        answer = json.dumps(st.session_state.json_data, ensure_ascii=False, indent=2)
+
+                        st.session_state.final_json = st.session_state.json_data.copy()
+
+                        answer = """✅ He guardado toda la información de tu viaje. 
+                        Ahora puedo recomendarte experiencias personalizadas."""
+
 
             st.session_state.messages.append({"role": "assistant", "content": answer})
             writing_placeholder.markdown(
@@ -375,6 +459,15 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                 unsafe_allow_html=True
             )
 
+            if st.session_state.current_field is None and "final_json" in st.session_state and st.session_state.final_json:
+                unificado(
+                    experiencias_df,
+                    st.session_state.province_month_df,
+                    st.session_state.complete_slice_df,
+                    st.session_state.final_json
+                )
+
         except Exception as e:
-            writing_placeholder.empty()
-            st.error(f"No se pudo conectar a Ollama: {e}")
+            st.error(f"❌ Ocurrió un error: {e}")
+            st.text("Traceback completo:")
+            st.text(traceback.format_exc())

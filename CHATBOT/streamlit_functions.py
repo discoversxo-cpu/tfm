@@ -1,20 +1,10 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
 from snowflake.snowpark import Session
-from sklearn.metrics.pairwise import cosine_similarity
 import unicodedata
-import json
-import google.generativeai as genai
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Configuración de secretos
-# La clave 'genai_api_key' debe estar configurada en la nube de Streamlit
-genai.configure(api_key=st.secrets["genai_api_key"])
-
-# Modelo de IA
-AI_MODEL = genai.GenerativeModel('gemini-1.5-flash')
-
-# ----------------- Funciones de tu modelo de recomendación -----------------
 SNOWFLAKE_CONFIG = {
     "account": st.secrets["account"],
     "user": st.secrets["user"],
@@ -25,12 +15,74 @@ SNOWFLAKE_CONFIG = {
     "schema": st.secrets["schema"]
 }
 
+def norm_0_1(series: pd.Series) -> pd.Series:
+    s = series.astype(float)
+    return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else 0 * s
+
+def normalize_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    df_norm = pd.DataFrame(index=df.index)
+    for c in cols:
+        if c in df.columns:
+            df_norm[f"{c}_index"] = norm_0_1(df[c])
+    return df_norm
+
+def build_province_month_features(raw_df: pd.DataFrame) -> pd.DataFrame:
+    column_map = {
+        "NOMBRE_CCAA": "ccaa",
+        "NOMBRE_PRO": "province",
+        "PERIODO": "period",
+        "TEMP_MED": "mean_temp",
+        "TEMP_MAX": "max_temp",
+        "TEMP_MIN": "min_temp",
+        "PRECIPITACION": "rain",
+        "ADR": "price",
+        "PROPORCION_OCUPACION_HABIT": "crowd",
+        "PROPORCION_OCUPACION_CAMAS": "occ_beds",
+        "PROPORCION_OCUPACION_CAMAS_FINDE": "occ_beds_weekend",
+        "ESTABLECIMIENTOS_ABIERTOS": "establishments",
+        "NUMERO_DE_HABITACIONES": "n_rooms",
+        "NUMERO_DE_CAMAS": "n_beds",
+        "EMPLEADOS": "employees",
+        "TURISTAS": "tourists",
+        "ALTITUD": "altitude",
+        "GEOGRAFIA": "geography"
+    }
+
+    df = raw_df.rename(columns=column_map).copy()
+    df["period_str"] = df["period"].astype(str).str.replace("M", "-") 
+    df["year_month"] = pd.to_datetime(df["period_str"], format="%Y-%m", errors="coerce").dt.to_period("M")
+    df["geography"] = df["geography"].str.lower()
+
+    event_cols = ["AFICIONES_Y_JUEGOS", "ARTES_Y_SOCIEDAD", "DEPORTES_Y_BIENESTAR",
+                  "FESTIVALES", "GASTRONOMIA", "FAMILIA"]
+    
+    df["events_total"] = df[event_cols].sum(axis=1)
+
+    feature_cols = [
+        "province", "year_month",
+        "mean_temp", "max_temp", "min_temp", "rain",
+        "events_total", *event_cols, "price", "crowd",
+        "establishments", "n_rooms", "n_beds", "employees", "tourists",
+        "altitude", "geography"
+    ]
+
+    features_df = df[feature_cols].dropna(subset=["province", "year_month"])
+    numeric_cols = features_df.select_dtypes(include=np.number).columns.tolist()
+    features_df_norm = normalize_columns(features_df, numeric_cols)
+    features_df = pd.concat([features_df, features_df_norm], axis=1)
+
+    return features_df
+
 @st.cache_data
 def load_data_from_snowflake():
     try:
         with Session.builder.configs(SNOWFLAKE_CONFIG).create() as sf_session:
             master_forecasted_df = sf_session.table("TUI_TFM.PROCESSED.MASTER_FORECASTED").to_pandas()
             experiencis_df = sf_session.table("TUI_TFM.PROCESSED.EXP_TUI").to_pandas()
+            
+            # --- Aplicar tu función inmediatamente ---
+            master_forecasted_df = build_province_month_features(master_forecasted_df)
+            
             return experiencis_df, master_forecasted_df
     except Exception as e:
         st.error(f"❌ Error al cargar desde Snowflake: {e}")
@@ -65,17 +117,6 @@ def validar_provincia(raw_input: str, df_provincias: pd.Series) -> str:
             if norm_input in norm_name: return official_name.lower()
     raise ValueError(f"Provincia '{raw_input}' no encontrada")
 
-def norm_0_1(series: pd.Series) -> pd.Series:
-    s = series.astype(float)
-    return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else 0 * s
-
-def normalize_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    df_norm = pd.DataFrame(index=df.index)
-    for c in cols:
-        if c in df.columns:
-            df_norm[f"{c}_index"] = norm_0_1(df[c])
-    return df_norm
-
 def _geo_accept_set(t: str) -> set:
     geo_map = {
         "playa": {"playa", "mixto"},
@@ -93,9 +134,47 @@ def _geo_mask(series_geo: pd.Series, tourism: str) -> pd.Series:
 
 def categorize(value, series):
     p25, p75 = series.quantile([0.25, 0.75])
-    if value <= p25: return "low"
-    elif value <= p75: return "medium"
-    else: return "high"
+    if value <= p25: return "baja"
+    elif value <= p75: return "media"
+    else: return "alta"
+
+def compute_user_score(df, target_temp, event_weights, crowd, rain, budget):
+    # Temp score
+    temp_score = np.exp(-((df["mean_temp"] - target_temp).abs() / 4.0))
+
+    # Event score
+    event_signal = sum(df.get(ev, pd.Series(0, index=df.index)) * w for ev, w in event_weights.items())
+    event_index = norm_0_1(np.log1p(event_signal.astype(float)))
+
+    # Oferta
+    offer_cols = ["establishments_index", "n_beds_index", "employees_index"]
+    offer_score = df[offer_cols].sum(axis=1)
+
+    # Penalizaciones
+    crowd_penalty = 1 - df["crowd_index"]
+    price_penalty = 1 - df["price_index"]
+    rain_penalty = 1 - df["rain_index"]
+
+    # Pesos de tolerancia
+    tol_weights = {
+        "crowd": {"baja": 0.5, "media": 0.30, "alta": 0}.get(crowd, 0.30),
+        "rain": {"baja": 0.5, "media": 0.30, "alta": 0}.get(rain, 0.30),
+        "price": {"baja": 0.5, "media": 0.30, "alta": 0.1}.get(budget, 0.30),
+    }
+
+    tol_comp = (
+        tol_weights["crowd"] * crowd_penalty +
+        tol_weights["price"] * price_penalty +
+        tol_weights["rain"] * rain_penalty
+    )
+
+    # Score final
+    return (
+        0.30 * temp_score +
+        0.25 * event_index +
+        0.20 * offer_score +
+        0.25 * tol_comp
+    )
     
 def _alts_once(df_slice, base_row, sim_matrix, tourism_type, sim_geo_bonus, 
                top_set, target_temp, crowd_delta, temp_dev, user_drop, require_geo=True):
@@ -113,8 +192,8 @@ def _alts_once(df_slice, base_row, sim_matrix, tourism_type, sim_geo_bonus,
         geo_ok = pd.Series(True, index=candidates.index)
     mask = (
         (~candidates["province"].isin(top_set)) &
-        (candidates["crowd_index"] < base_row["crowd_index"] + float(crowd_delta)) &
-        (candidates["user_score"] >= base_row["user_score"] * (1.0 - float(user_drop))) &
+        (candidates["crowd_index"] < base_row["crowd_index"] * crowd_delta) &
+        (candidates["user_score"] >= base_row["user_score"] * user_drop) &
         ((candidates["mean_temp"] - float(target_temp)).abs() <= float(temp_dev))
     )
     if require_geo:
@@ -127,6 +206,7 @@ def _alts_once(df_slice, base_row, sim_matrix, tourism_type, sim_geo_bonus,
 
 def _try_relaxations(df, sim_matrix, base, relaxations, already : list, **kwargs):
     for crowd_delta, temp_dev, user_drop, require_geo in relaxations:
+
         cand = _alts_once(
             df, base, sim_matrix,
             kwargs["tourism_type"], kwargs["sim_geo_bonus"],
@@ -140,7 +220,7 @@ def _try_relaxations(df, sim_matrix, base, relaxations, already : list, **kwargs
     return pd.DataFrame()
 
 def _progressive_relax(df, sim_matrix, base, already : list, **kwargs):
-    crowd_relax, temp_relax, user_drop_relax = 0.2, 3, 0.15
+    crowd_relax, temp_relax, user_drop_relax = 1.8, 3, 0.15
     step, max_iter = 0.05, 20
     for _ in range(max_iter):
         cand = _alts_once(
@@ -159,127 +239,85 @@ def _progressive_relax(df, sim_matrix, base, already : list, **kwargs):
         user_drop_relax += step
     return pd.DataFrame()
 
-@st.cache_data
-def build_province_month_features(raw_df: pd.DataFrame) -> pd.DataFrame:
-    column_map = {
-        "NOMBRE_CCAA": "ccaa",
-        "NOMBRE_PRO": "province", "PERIODO": "period",
-        "TEMP_MED": "mean_temp", "TEMP_MAX": "max_temp", "TEMP_MIN": "min_temp",
-        "PRECIPITACION": "rain", "ADR": "price",
-        "PROPORCION_OCUPACION_HABIT": "crowd",
-        "PROPORCION_OCUPACION_CAMAS": "occ_beds",
-        "PROPORCION_OCUPACION_CAMAS_FINDE": "occ_beds_weekend",
-        "ESTABLECIMIENTOS_ABIERTOS": "establishments",
-        "NUMERO_DE_HABITACIONES": "n_rooms", "NUMERO_DE_CAMAS": "n_beds",
-        "EMPLEADOS": "employees", "TURISTAS": "tourists",
-        "ALTITUD": "altitude",
-        "GEOGRAFIA": "geography"
-    }
-    df = raw_df.rename(columns=column_map).copy()
-    df["period_str"] = df["period"].astype(str).str.replace("M", "-")
-    df["year_month"] = pd.to_datetime(df["period_str"], format="%Y-%m", errors="coerce").dt.to_period("M")
-    df["geography"] = df["geography"].str.lower()
-    event_cols = ["HOBBIES_AND_GAMES", "ARTS_AND_SOCIETY", "SPORTS_AND_WELLNESS", "FESTIVALS", "FOOD", "FAMILY"]
-    df["events_total"] = df[event_cols].sum(axis=1)
-    feature_cols = [
-        "province", "year_month",
-        "mean_temp", "max_temp", "min_temp", "rain",
-        "events_total", *event_cols, "price", "crowd",
-        "establishments", "n_rooms", "n_beds", "employees", "tourists",
-        "altitude", "geography"
-    ]
-    features_df = df[feature_cols].dropna(subset=["province", "year_month"])
-    numeric_cols = features_df.select_dtypes(include=np.number).columns.tolist()
-    features_df_norm = normalize_columns(features_df, numeric_cols)
-    features_df = pd.concat([features_df, features_df_norm], axis=1)
-    return features_df
-
-def recomendar_alternativas_stream(
+def recomendar_alternativas(
     complete_slice_df: pd.DataFrame, 
-    features_df: pd.DataFrame, 
-    modo: str,
-    preference: str,
-    selected_events: list[str],
-    provincia_base: str = None,
-    tourism_type: str = None,
-    target_temp: int = None,
-    crowd_tol: str = None,
-    rain_tol: str = None,
-    budget_tol: str = None,
+    features_df: pd.DataFrame,
+    final_json,
     top_n: int = 3,
-    min_crowd_delta: float = 0.05,
+    min_crowd_delta: float = 0.5,
     max_user_score_drop: float = 0.15,
     max_temp_deviation_c: float = 3.0,
     sim_geo_bonus: float = 0.08,
     ensure_alternatives: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    
+    cols = {
+    "aficiones y juegos": "Hobbies and Games",
+    "artes y sociedad": "Arts and Society",
+    "deportes y bienestar": "Sports and Wellness",
+    "festivales": "Festivals",
+    "gastronomia": "Food",
+    "familia": "Family",
+    "none": "none"  # o "UNKNOWN", según prefieras
+}
     event_weights = {}
     selected_event_cols = []
-    if preference == "s":
-        selected_event_cols = [c.replace(" ", "_") for c in selected_events]
-        weights_base = np.linspace(1.0, 0.5, len(selected_events))
+    selected_events = []
+
+    if final_json["preferencias_experiencias"] == "none":
+        event_weights = {"events_total":1.0}
+    else:
+        cats = final_json["preferencias_experiencias"].split(",")
+        selected_events = [cols[e.strip().lower()] for e in cats]
+        selected_event_cols = [c.strip().upper().replace(" ", "_") for c in cats]
+        weights_base = np.linspace(1.0, 0.5, len(selected_event_cols))
         weights = weights_base / weights_base.sum()
         event_weights = {c:w for c,w in zip(selected_event_cols, weights)}
-    else:
-        event_weights = {"events_total":1.0}
-    if modo == "2":
-        prov_key = provincia_base
-        prov_data = features_df[features_df["province"].str.lower() == prov_key]
-        if prov_data.empty:
-            st.warning(f"No hay datos para la provincia '{provincia_base.title()}' en el período seleccionado.")
-            return pd.DataFrame(), pd.DataFrame(), []
-        base_row = prov_data.iloc[0]
+        
+        
+    if final_json["modo_chat"] == "2":
+
+        prov_map = {p.lower(): p for p in features_df["province"].unique()}        
+        prov_key = prov_map[final_json["provincia_base"].lower()]
+
+        base_row = features_df[features_df["province"] == prov_key].iloc[0]
         tourism_type = base_row["geography"]
-        target_temp = base_row["mean_temp"]
+        target_temp = float(base_row["mean_temp"])
         crowd = categorize(base_row["crowd_index"], features_df["crowd_index"])
         rain = categorize(base_row["rain_index"], features_df["rain_index"])
         budget = categorize(base_row["price_index"], features_df["price_index"])
+
         if tourism_type in ("playa","montaña","urbano","mixto"):
             mask_geo = _geo_mask(features_df["geography"], tourism_type)
             features_df = features_df[mask_geo]
             if features_df.empty:
                 st.warning("EMPTY do to tourism_type")
                 return pd.DataFrame(), pd.DataFrame(), []
+        
     else:
-        crowd = crowd_tol
-        rain = rain_tol
-        budget = budget_tol
+        tourism_type = final_json["tipo_geografia"].lower()
+        target_temp = float(final_json["temperatura"])
+        crowd = final_json["tolerancia_multitudes"].lower()
+        rain = final_json["tolerancia_lluvia"].lower()
+        budget = final_json["presupuesto"].lower()
+
     features_df = features_df[(features_df["mean_temp"] - target_temp).abs() <= 4.0]
-    if features_df.empty:
-        st.warning("EMPTY do to temperature")
-        return pd.DataFrame(), pd.DataFrame(), []
-    event_signal = sum(features_df.get(ev, pd.Series(0, index=features_df.index)) * w for ev, w in event_weights.items())
-    offer_cols = ["establishments", "n_beds", "employees"]
-    event_index = norm_0_1(np.log1p(event_signal.astype(float)))
-    temp_score = np.exp(-((features_df["mean_temp"] - float(target_temp)).abs() / 4.0))
-    offer_score = norm_0_1(features_df[offer_cols].sum(axis=1))
-    crowd_penalty = (1 - features_df["crowd_index"])
-    price_penalty = (1 - features_df["price_index"])
-    rain_penalty = (1 - features_df["rain_index"])
-    tol_weights = {
-        "crowd":{"low":0.5,"medium":0.30,"high":0}.get(crowd,0.30),
-        "rain":{"low":0.5,"medium":0.30,"high":0}.get(rain,0.30),
-        "price":{"low":0.5,"medium":0.30,"high":0.1}.get(budget,0.30)
-    }
-    tol_comp = (
-        tol_weights["crowd"] * crowd_penalty +
-        tol_weights["price"] * price_penalty +
-        tol_weights["rain"] * rain_penalty
+
+    features_df["user_score"] = compute_user_score(
+        features_df, target_temp, event_weights, crowd, rain, budget
     )
-    base_user_score = (
-        0.30 * temp_score +
-        0.25 * event_index +
-        0.25 * tol_comp +
-        0.20 * offer_score
+
+    complete_slice_df["user_score"] = compute_user_score(
+        complete_slice_df, target_temp, event_weights, crowd, rain, budget
     )
-    features_df["user_score"] = base_user_score
-    complete_slice_df["user_score"] = base_user_score
-    if modo == "2":
+
+    if final_json["modo_chat"] == "2":
         top_base = features_df[features_df["province"] == prov_key]
         top_set = {prov_key}
     else:
         top_base = features_df.nlargest(top_n,"user_score")
         top_set = set(top_base["province"])
+
     columns_to_keep = [c for c in top_base.columns if c.endswith("_index")]
     alt_blocks = []
     relaxations = [
@@ -288,6 +326,7 @@ def recomendar_alternativas_stream(
         (min_crowd_delta*2, max_temp_deviation_c+1, max_user_score_drop+0.05, True),
         (min_crowd_delta*3, max_temp_deviation_c+2, max_user_score_drop+0.10, True)
     ]
+
     M_features = features_df[columns_to_keep].to_numpy()
     sim_features = cosine_similarity(np.nan_to_num(M_features, nan=0.0))
     M_complete = complete_slice_df[columns_to_keep].to_numpy()
@@ -321,11 +360,11 @@ def recomendar_alternativas_stream(
         alternatives = alternatives.sort_values("similarity", ascending=False).head(top_n).reset_index(drop=True)
     else:
         alternatives = pd.DataFrame()
-    if modo == "2":
+    if final_json["modo_chat"] == "2":
         if alternatives.empty:
             st.warning("No hay alternativas suficientemente similares a la provincia base.")
-            return pd.DataFrame(), pd.DataFrame(), selected_events
-        return top_base, alternatives, selected_events
+            return "", pd.DataFrame(), selected_events
+        return base_row["province"], alternatives, selected_events
     else:
         if top_base.empty:
             st.warning("⚠️ No hay resultados para ese mes.")
@@ -360,62 +399,43 @@ def recomendar_actividades(df, provincia, categorias=None, top_n=3):
     recomendadas = df_provincia.head(top_n)
     return recomendadas[["NOMBRE_PRO", "TITULO", "RATING", "REVIEWS_COUNT", "score", "LINK"]]
 
-def get_params_from_chat(chat_history, available_provinces, available_events, available_tourism_types):
-    system_instruction = f"""
-    Eres un asistente de viajes de una empresa de turismo. Tu único objetivo es extraer los parámetros de viaje de la conversación del usuario y devolverlos en formato JSON.
-
-    Los parámetros que necesitas son:
-    1. 'modo': El modo de recomendación.
-       - Si el usuario menciona una provincia o un lugar específico de España para su viaje, el modo es '2' (selección de provincia base).
-       - Si el usuario solo menciona preferencias (clima, tipo de turismo, etc.) sin un lugar en mente, el modo es '1' (recomendación automática).
-    2. 'provincia_base': La provincia que el usuario ha mencionado. Esto solo se aplica si el modo es '2'. Valida que la provincia sea una de estas: {available_provinces}. No intentes adivinar. Si no está en la lista, no incluyas esta clave en el JSON.
-    3. 'mes': El mes del viaje (como un número del 1 al 12). Valida que sea un mes del 7 (Julio) de 2025 al 6 (Junio) de 2026.
-    4. 'anio': El año del viaje (2025 o 2026).
-    5. 'turismo': El tipo de turismo. Debe ser 'playa', 'montaña', 'urbano', 'mixto', o 'ninguna'.
-    6. 'eventos': Una lista de tipos de eventos. Valida que cada tipo sea uno de estos: {available_events}. Si el usuario no menciona nada, la lista debe ser vacía.
-    7. 'multitudes': La tolerancia a las multitudes. Debe ser 'low', 'medium' o 'high'.
-    8. 'lluvia': La tolerancia a la lluvia. Debe ser 'low', 'medium' o 'high'.
-    9. 'presupuesto': El presupuesto. Debe ser 'low', 'medium' o 'high'.
-    10. 'temperatura': La temperatura deseada. Es un número entero.
-
-    Tu respuesta final debe ser **únicamente** un objeto JSON. No incluyas ningún texto adicional, saludos o explicaciones.
-    Si falta algún parámetro, no generes el JSON. En su lugar, responde de forma conversacional y pide al usuario que te dé la información que te falta. Por ejemplo, "Claro, ¿qué provincia de España te gustaría como punto de partida?" o "Entendido, ¿cuál es tu presupuesto para este viaje?".
-
-    Ejemplo de respuesta:
-    Si el usuario dice "Quiero un viaje a Madrid en julio de 2025", tu respuesta sería: "Por favor, dime tus preferencias de turismo, eventos, multitudes, lluvia y presupuesto para que pueda hacer una recomendación más precisa."
-    Cuando tengas todos los parámetros, devuelve el JSON completo.
-    """
-    
-    user_prompt = f"""
-    Historial de la conversación:
-    {json.dumps(chat_history)}
-
-    Parámetros disponibles (si están presentes):
-    modo: 1 o 2 (automático o por provincia)
-    provincia_base: un string. Solo si el modo es 2.
-    mes: un número del 1 al 12
-    anio: 2025 o 2026
-    turismo: 'playa', 'montaña', 'urbano', 'mixto' o 'ninguna'
-    eventos: una lista de strings.
-    multitudes: 'low', 'medium' o 'high'
-    lluvia: 'low', 'medium' o 'high'
-    presupuesto: 'low', 'medium' o 'high'
-    temperatura: un número entero
-
-    Extrae los parámetros de la conversación y devuelve un JSON completo o continúa la conversación.
-    """
-    
-    response = AI_MODEL.generate_content(
-        contents=[
-            {"role": "user", "parts": [{"text": user_prompt}]}
-        ],
-        system_instruction=system_instruction
+def unificado(experiencias_df, province_month_df, complete_slice_df, final_json):
+    # Obtener alternativas según el modo
+    result = recomendar_alternativas(complete_slice_df, province_month_df, final_json)
+    top_df, provincia_base, alt_df, selected_events = (
+        (result[0], None, result[1], result[2]) if final_json["modo_chat"] == "1"
+        else (None, result[0], result[1], result[2])
     )
-    
-    try:
-        # Intenta parsear la respuesta como JSON
-        response_json = json.loads(response.text)
-        return response_json
-    except json.JSONDecodeError:
-        # Si no es JSON, es una respuesta conversacional
-        return response.text
+
+    top_provincias = top_df["province"].tolist() if top_df is not None and not top_df.empty else []
+    alt_provincias = alt_df["province"].tolist() if alt_df is not None and not alt_df.empty else []
+
+    def mostrar_actividades(provincias, titulo, skip_base=False):
+        st.subheader(titulo)
+        for prov in provincias:
+            if skip_base and provincia_base and prov == provincia_base:
+                continue
+            if prov.upper() not in experiencias_df["NOMBRE_PRO"].str.upper().values:
+                st.warning(f"No hay actividades en {prov}")
+                continue
+            actividades = recomendar_actividades(
+                experiencias_df, prov, categorias=selected_events, top_n=3
+            )
+            if actividades.empty:
+                st.info(f"No hay actividades encontradas en {prov}")
+            else:
+                st.write(f"**{prov}**")
+                st.dataframe(actividades)
+
+    # Mostrar actividades según el modo
+    if provincia_base:
+        mostrar_actividades([provincia_base], f"ACTIVIDADES EN {provincia_base.upper()}")
+    else:
+        mostrar_actividades(top_provincias, "ACTIVIDADES EN PROVINCIAS PRINCIPALES")
+
+    if alt_df is not None and not alt_df.empty:
+        mostrar_actividades(
+            alt_provincias,
+            "ACTIVIDADES EN PROVINCIAS SIMILARES / ALTERNATIVAS",
+            skip_base=True
+        )
