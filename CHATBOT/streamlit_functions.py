@@ -411,67 +411,74 @@ def unificado(experiencias_df, province_month_df, complete_slice_df, final_json)
 
     st.markdown("""
     <style>
-    .card {
-        border:1px solid #ddd;
-        border-radius:12px;
-        padding:15px;
-        margin-bottom:15px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        display:flex;
-        flex-direction:column;
-        justify-content:space-between;
-    }
+    .card { border:1px solid #ddd; border-radius:12px; padding:15px; margin-bottom:15px;
+           box-shadow: 0 4px 12px rgba(0,0,0,0.15); display:flex; flex-direction:column; justify-content:space-between; transition: transform 0.3s;}
+    .card:hover { transform: translateY(-5px); box-shadow: 0 6px 18px rgba(0,0,0,0.2); }
+    .descripcion { max-height:100px; overflow:hidden; transition: max-height 0.5s ease; }
+    .descripcion.expandida { max-height:1000px; }
+    .leer-mas { font-style:italic; text-decoration:underline; font-size:12px; cursor:pointer; color:#0073e6; display:block; margin-top:5px; }
+    .ver-mas { background-color:#009879; color:white; padding:5px 8px; border:none; border-radius:6px; font-size:12px;
+               text-align:center; text-decoration:none; display:inline-block; margin-top:5px; }
 
-    .descripcion {
-        max-height:100px;  /* Altura inicial */
-        overflow:hidden;
-        transition: max-height 0.5s ease;
-    }
-
-    .descripcion.expandida {
-        max-height:1000px;  /* Altura máxima al expandir */
-    }
-
-    .leer-mas {
-        font-style:italic;
-        text-decoration:underline;
-        font-size:12px;
-        cursor:pointer;
-        color:#0073e6;
-        display:block;
-        margin-top:5px;
-    }
-
-    .ver-mas {
-        background-color:#009879;
-        color:white;
-        padding:5px 8px;
-        border:none;
-        border-radius:6px;
-        font-size:12px;
-        text-align:center;
-        text-decoration:none;
-        display:inline-block;
-        margin-top:5px;
-    }
+    h2 { color:#ff5722; font-size:28px; font-weight:900; text-transform: uppercase;
+         text-shadow: 1px 1px 2px rgba(0,0,0,0.3); margin-bottom:15px; }
+    h3 { color:#009688; font-size:22px; font-weight:700; text-transform: uppercase;
+         text-shadow: 1px 1px 1px rgba(0,0,0,0.2); margin-bottom:10px; }
     </style>
-
     <script>
-    function toggleDescripcion(id){
-        var elem = document.getElementById(id);
-        elem.classList.toggle('expandida');
-    }
+    function toggleDescripcion(id){ var elem = document.getElementById(id); elem.classList.toggle('expandida'); }
     </script>
     """, unsafe_allow_html=True)
 
-    def mostrar_actividades_cards(provincias, titulo, skip_base=False):
-        st.markdown(f"## {titulo}")
+    # --- Componente HTML mínimo solo para scroll con altura 1 ---
+    import streamlit.components.v1 as components
+    components.html("""
+        <div id="scroll_ref" style="height:1px; margin-top:-100px;"></div>
+        <script>
+        (function(){
+            const MAX_TRIES = 30;
+            const INTERVAL_MS = 300;
+            let tries = 0;
+
+            function scrollToEl(el){
+                try{
+                    // el margin negativo hará que quede un poco por encima
+                    el.scrollIntoView({behavior:'smooth', block:'start'});
+                }catch(e){}
+            }
+
+            function attempt(){
+                tries++;
+                const el = document.getElementById('scroll_ref');
+                if(el){
+                    scrollToEl(el);
+                    setTimeout(()=>scrollToEl(el), 200); // segundo intento
+                    return;
+                }
+                if(tries < MAX_TRIES){
+                    setTimeout(attempt, INTERVAL_MS);
+                }
+            }
+
+            setTimeout(attempt, 300);
+        })();
+        </script>
+    """, height=1)
+
+    # --- Función para mostrar cards ---
+    def mostrar_actividades_cards(provincias, titulo, skip_base=False, primer_titulo=False):
+        if primer_titulo:
+            st.markdown(f'<h2 id="primer_titulo_actividad">{titulo}</h2>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<h2>{titulo}</h2>', unsafe_allow_html=True)
+
         for prov in provincias:
             if skip_base and provincia_base and prov == provincia_base:
                 continue
             if prov.upper() not in experiencias_df["NOMBRE_PRO"].str.upper().values:
                 st.warning(f"No hay actividades en {prov}")
                 continue
+
             actividades = recomendar_actividades(
                 experiencias_df, prov, categorias=selected_events, top_n=3
             )
@@ -479,7 +486,7 @@ def unificado(experiencias_df, province_month_df, complete_slice_df, final_json)
                 st.info(f"No hay actividades encontradas en {prov}")
                 continue
 
-            st.markdown(f"### {prov}")
+            st.markdown(f'<h3>{prov}</h3>', unsafe_allow_html=True)
             cols = st.columns(len(actividades))
             for i, (_, row) in enumerate(actividades.iterrows()):
                 card_id = f"desc_{prov}_{i}"
@@ -497,11 +504,13 @@ def unificado(experiencias_df, province_month_df, complete_slice_df, final_json)
                         </div>
                     """, unsafe_allow_html=True)
 
+    # Mostrar actividades principales
     if provincia_base:
-        mostrar_actividades_cards([provincia_base], f"ACTIVIDADES EN {provincia_base.upper()}")
+        mostrar_actividades_cards([provincia_base], f"ACTIVIDADES EN {provincia_base.upper()}", primer_titulo=True)
     else:
-        mostrar_actividades_cards(top_provincias, "ACTIVIDADES EN PROVINCIAS PRINCIPALES")
+        mostrar_actividades_cards(top_provincias, "ACTIVIDADES EN PROVINCIAS PRINCIPALES", primer_titulo=True)
 
+    # Mostrar alternativas
     if alt_df is not None and not alt_df.empty:
         mostrar_actividades_cards(
             alt_provincias,
