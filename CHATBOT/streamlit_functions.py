@@ -397,10 +397,9 @@ def recomendar_actividades(df, provincia, categorias=None, top_n=3):
             ascending=False
         )
     recomendadas = df_provincia.head(top_n)
-    return recomendadas[["NOMBRE_PRO", "TITULO", "RATING", "REVIEWS_COUNT", "score", "LINK"]]
+    return recomendadas[["TITULO", "DESCRIPCION", "CATEGORIAS", "RATING", "REVIEWS_COUNT", "LINK"]]
 
 def unificado(experiencias_df, province_month_df, complete_slice_df, final_json):
-    # Obtener alternativas según el modo
     result = recomendar_alternativas(complete_slice_df, province_month_df, final_json)
     top_df, provincia_base, alt_df, selected_events = (
         (result[0], None, result[1], result[2]) if final_json["modo_chat"] == "1"
@@ -410,8 +409,63 @@ def unificado(experiencias_df, province_month_df, complete_slice_df, final_json)
     top_provincias = top_df["province"].tolist() if top_df is not None and not top_df.empty else []
     alt_provincias = alt_df["province"].tolist() if alt_df is not None and not alt_df.empty else []
 
-    def mostrar_actividades(provincias, titulo, skip_base=False):
-        st.subheader(titulo)
+    st.markdown("""
+    <style>
+    .card {
+        border:1px solid #ddd;
+        border-radius:12px;
+        padding:15px;
+        margin-bottom:15px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+    }
+
+    .descripcion {
+        max-height:100px;  /* Altura inicial */
+        overflow:hidden;
+        transition: max-height 0.5s ease;
+    }
+
+    .descripcion.expandida {
+        max-height:1000px;  /* Altura máxima al expandir */
+    }
+
+    .leer-mas {
+        font-style:italic;
+        text-decoration:underline;
+        font-size:12px;
+        cursor:pointer;
+        color:#0073e6;
+        display:block;
+        margin-top:5px;
+    }
+
+    .ver-mas {
+        background-color:#009879;
+        color:white;
+        padding:5px 8px;
+        border:none;
+        border-radius:6px;
+        font-size:12px;
+        text-align:center;
+        text-decoration:none;
+        display:inline-block;
+        margin-top:5px;
+    }
+    </style>
+
+    <script>
+    function toggleDescripcion(id){
+        var elem = document.getElementById(id);
+        elem.classList.toggle('expandida');
+    }
+    </script>
+    """, unsafe_allow_html=True)
+
+    def mostrar_actividades_cards(provincias, titulo, skip_base=False):
+        st.markdown(f"## {titulo}")
         for prov in provincias:
             if skip_base and provincia_base and prov == provincia_base:
                 continue
@@ -423,19 +477,34 @@ def unificado(experiencias_df, province_month_df, complete_slice_df, final_json)
             )
             if actividades.empty:
                 st.info(f"No hay actividades encontradas en {prov}")
-            else:
-                st.write(f"**{prov}**")
-                st.dataframe(actividades)
+                continue
 
-    # Mostrar actividades según el modo
+            st.markdown(f"### {prov}")
+            cols = st.columns(len(actividades))
+            for i, (_, row) in enumerate(actividades.iterrows()):
+                card_id = f"desc_{prov}_{i}"
+                with cols[i]:
+                    st.markdown(f"""
+                        <div class="card">
+                            <h4>{row['TITULO']}</h4>
+                            <p style="font-style:italic; color:#555;">{row['CATEGORIAS']}</p>
+                            <div id="{card_id}" class="descripcion">
+                                {row['DESCRIPCION']}
+                                <span class="leer-mas" onclick="toggleDescripcion('{card_id}')">Leer más</span>
+                            </div>
+                            <p>⭐ {row['RATING'] if pd.notna(row['RATING']) else ''} ({row['REVIEWS_COUNT']} reviews)</p>
+                            <a href="{row['LINK']}" target="_blank" class="ver-mas">Ver más</a>
+                        </div>
+                    """, unsafe_allow_html=True)
+
     if provincia_base:
-        mostrar_actividades([provincia_base], f"ACTIVIDADES EN {provincia_base.upper()}")
+        mostrar_actividades_cards([provincia_base], f"ACTIVIDADES EN {provincia_base.upper()}")
     else:
-        mostrar_actividades(top_provincias, "ACTIVIDADES EN PROVINCIAS PRINCIPALES")
+        mostrar_actividades_cards(top_provincias, "ACTIVIDADES EN PROVINCIAS PRINCIPALES")
 
     if alt_df is not None and not alt_df.empty:
-        mostrar_actividades(
+        mostrar_actividades_cards(
             alt_provincias,
-            "ACTIVIDADES EN PROVINCIAS SIMILARES / ALTERNATIVAS",
+            "ACTIVIDADES EN PROVINCIAS MENOS CONCURRIDAS",
             skip_base=True
         )

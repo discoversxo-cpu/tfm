@@ -238,11 +238,21 @@ for msg in st.session_state.messages:
         css_class = "user-msg" if role=="user" else "assistant-msg"
         st.markdown(f"<div class='{css_class}'>{msg['content']}</div>", unsafe_allow_html=True)
 
-# --- Input del usuario ---
-if prompt := st.chat_input("Escribe tu mensaje:"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(f"<div class='user-msg'>{prompt}</div>", unsafe_allow_html=True)
+if st.session_state.current_field is None and "final_json" in st.session_state:
+
+    unificado(
+        experiencias_df,
+        st.session_state.province_month_df,
+        st.session_state.complete_slice_df,
+        st.session_state.final_json
+    )
+
+# --- Mostrar input solo si quedan campos por llenar ---
+if not("final_json" in st.session_state):
+    if prompt := st.chat_input("Escribe tu mensaje:"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(f"<div class='user-msg'>{prompt}</div>", unsafe_allow_html=True)
 
     # --- Mostrar animación de “bot escribiendo” ---
     with st.chat_message("assistant"):
@@ -417,6 +427,7 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                             if field in ["tipo_geografia", "temperatura", "tolerancia_multitudes", "tolerancia_lluvia", "presupuesto"]:
                                 st.session_state.json_data[field] = "none"
                     st.session_state.current_field = None
+
                     st.session_state.final_json = st.session_state.json_data.copy()
 
                     answer = """✅ He guardado toda la información de tu viaje. Ahora puedo recomendarte experiencias personalizadas."""
@@ -452,20 +463,15 @@ if prompt := st.chat_input("Escribe tu mensaje:"):
                         answer = """✅ He guardado toda la información de tu viaje. 
                         Ahora puedo recomendarte experiencias personalizadas."""
 
-
             st.session_state.messages.append({"role": "assistant", "content": answer})
             writing_placeholder.markdown(
                 f"<div class='assistant-msg'>{answer}</div>",
                 unsafe_allow_html=True
             )
 
-            if st.session_state.current_field is None and "final_json" in st.session_state and st.session_state.final_json:
-                unificado(
-                    experiencias_df,
-                    st.session_state.province_month_df,
-                    st.session_state.complete_slice_df,
-                    st.session_state.final_json
-                )
+            if st.session_state.current_field is None and "final_json" in st.session_state:
+
+                st.rerun()
 
         except Exception as e:
             st.error(f"❌ Ocurrió un error: {e}")
