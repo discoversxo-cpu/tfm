@@ -3,7 +3,7 @@ import traceback
 import requests
 import json
 import time
-from streamlit_functions import load_data_from_snowflake, unificado, _geo_mask
+from streamlit_functions import load_data_from_snowflake, unificado, _geo_mask, validar_provincia
 import pandas as pd
 
 # --- Cargar datos desde Snowflake ---
@@ -32,11 +32,11 @@ st.title("💬 Chatea con Discover")
 st.markdown("""
 <div style='background-color:#e0f7fa; padding:15px; border-radius:12px; margin-bottom:15px; font-size:14px; line-height:1.5;'>
 <b>🌟 Bienvenido al Chat de Viajes 🌟</b><br><br>
-👋 Saluda a nuestro asistente para empezar.<br>
 ✈️ Responde a las preguntas para planear tu viaje de manera fácil y divertida.<br>
-💡 Puedes elegir las opciones sugeridas o escribir tu respuesta directamente.<br>
+💡 Puedes escribir tu respuesta directamente o elegir las opciones sugeridas.<br>
 📝 El chat recordará tus elecciones y te guiará paso a paso hasta completar tu plan de viaje.<br>
-🎉 ¡Disfruta la experiencia y prepárate para descubrir tu próxima aventura!
+🎉 ¡Disfruta la experiencia y prepárate para descubrir tu próxima aventura!<br><br>
+🔄 Si quieres planear <b>otro viaje</b>, simplemente recarga la página.
 </div>
 """, unsafe_allow_html=True)
 
@@ -154,7 +154,7 @@ def mes_opciones():
 def provincia_opciones():
     if "complete_slice_df" in st.session_state:
         df = st.session_state.province_month_df
-        return sorted(df["province"].dropna().unique()) + ["none"]
+        return sorted(df["province"].dropna().unique()) + ["sin preferencia"]
     return []
 
 def temperatura_opciones():
@@ -162,8 +162,17 @@ def temperatura_opciones():
         df = st.session_state.province_month_df
         temp_min = round(df["mean_temp"].min())
         temp_max = round(df["mean_temp"].max())
-        return [str(i) for i in range(int(temp_min), int(temp_max)+1)] + ["none"]
+        return [str(i) for i in range(int(temp_min), int(temp_max)+1)] + ["sin preferencia"]
     return []
+
+def mean_temp():
+    if "complete_slice_df" in st.session_state:
+        df = st.session_state.province_month_df
+        temp_min = round(df["mean_temp"].min())
+        temp_max = round(df["mean_temp"].max())
+        return str(round((temp_max+temp_min)/2))
+
+
 
 # --- Definir flujo de campos y opciones ---
 fields_info = {
@@ -171,53 +180,47 @@ fields_info = {
     "mes": {"options": mes_opciones, "prompt": "¿En qué mes planeas viajar?"},
     "preferencias_experiencias": {
         "options": ["aficiones y juegos", "artes y sociedad", "deportes y bienestar",
-                    "festivales", "gastronomia", "familia", "none"],
+                    "festivales", "gastronomia", "familia", "sin preferencia"],
         "prompt": "Elige hasta 3 experiencias que te interesen"
     },
     "provincia_base": {"options": provincia_opciones, "prompt": "¿En qué provincia te gustaría viajar?"},
-    "tipo_geografia": {"options": ["playa", "montaña", "urbano", "mixto","none"], "prompt": "¿Qué tipo de geografia prefieres?"},
+    "tipo_geografia": {"options": ["playa", "montaña", "urbano", "mixto","sin preferencia"], "prompt": "¿Qué tipo de geografia prefieres?"},
     "temperatura": {"options": temperatura_opciones, "prompt": "¿Qué clima prefieres?"},
     "tolerancia_multitudes": {"options": ["baja", "media", "alta"], "prompt": "¿Qué tolerancia tienes a las multitudes?"},
     "tolerancia_lluvia": {"options": ["baja", "media", "alta"], "prompt": "¿Qué tolerancia tienes a la lluvia?"},
-    "presupuesto": {"options": ["baja", "media", "alta"], "prompt": "¿Cuál es tu presupuesto?"},
+    "presupuesto": {"options": ["baja", "media", "alta"], "prompt": "¿Cuál es tu nivel de presupuesto?"},
 }
 
 # --- Normas de normalización por campo ---
 normalization_rules = {
     "anio": (
         "Busca si la respuesta contiene un año válido (2025 o 2026). "
-        "Si no se puede interpretar, devuelve 'none'. "
-        "Devuelve únicamente el año en minúsculas."
-    ),
+        "Si no se puede interpretar, devuelve 'sin preferencia'. "
+        "Devuelve únicamente el año o 'sin preferencia'."),
     "mes": (
         "Busca si la respuesta corresponde a un mes. "
-        "Devuelve el mes como número (ejemplo: enero→1). "
-        "Si no coincide, devuelve 'none'."
-    ),
+        "Si no coincide, devuelve 'sin preferencia'."),
     "preferencias_experiencias": (
         "El usuario puede mencionar uno o varias experiencias (máximo 3). "
         "Mapea cada uno a solo una opcion de las siguientes: aficiones y juegos, artes y sociedad, "
         "deportes y bienestar, festivales, gastronomia, familia. "
         "Devuelve únicamente los que mencionó, en minúsculas y separados por comas. "
-        "Si no hay coincidencias, devuelve 'none'."),
+        "Si no hay coincidencias o no tiene preferencia, devuelve 'sin preferencia'."),
     "provincia_base": (
         "Busca si el usuario menciona una provincia española válida. "
-        "Si no lo hace, devuelve 'none'. "
         "No inventes provincias. "
-        "Devuelve solo el nombre en minúsculas o 'none'."
-    ),
+        "Si no se puede mapear claramente o el usuario no tiene preferencia, devuelve 'sin preferencia'."
+        "Devuelve solo el nombre en minúsculas o 'sin preferencia'."),
     "tipo_geografia": (
         "Considera los siguientes valores: playa, montaña, urbano o mixto. "
         "Mapea la respuesta del usuario a uno de esos valores. "
-        "Si no se puede mapear claramente, devuelve 'none'."
-    ),
+        "Si no se puede mapear claramente o el usuario no tiene preferencia, devuelve 'sin preferencia'."),
     "temperatura": (
-        "asegurate de que la respuesta este dentro del rango de temperaturas disponibles. "
-        "Si no coincide claramente, devuelve 'none'."
-    ),
-    "tolerancia_multitudes": "Analiza todo el contexto de la respuesta del usuario y mapea la respuesta a: baja, media o alta. Si no se puede, devuelve 'none'.",
-    "tolerancia_lluvia": "Analiza todo el contexto de la respuesta del usuario y mapea la respuesta a: baja, media o alta. Si no se puede, devuelve 'none'.",
-    "presupuesto": "Analiza todo el contexto de la respuesta del usuario y mapea la respuesta a: baja, media o alta. Si no se puede, devuelve 'none'."
+        f"Mapea la respuesta del usuario a uno de los siguientes valores: {temperatura_opciones}. "
+        "Si no se puede mapear claramente a uno de esos valores o el usuario no tiene preferencia, devuelve 'sin preferencia'."),
+    "tolerancia_multitudes": "Analiza todo el contexto de la respuesta del usuario y siempre mapea la respuesta a alguna de estas opciones: baja, media o alta.",
+    "tolerancia_lluvia": "Analiza todo el contexto de la respuesta del usuario y siempre mapea la respuesta a alguna de estas opciones: baja, media o alta.",
+    "presupuesto": "Analiza todo el contexto de la respuesta del usuario y siempre mapea la respuesta a alguna de estas opciones: baja, media o alta."
 }
 
 # --- Prompt inicial conciso ---
@@ -227,7 +230,7 @@ SYSTEM_PROMPT = (
     "1) Interpreta siempre el contexto completo de la respuesta del usuario, "
     "2) Extrae el valor relevante y normalízalo en minúsculas. "
     "3) Maneja errores ortográficos y ajusta al valor válido más cercano. "
-    "4) Si no puedes mapear claramente la respuesta, devuelve 'none'. "
+    "4) Si no se puede mapear claramente o el usuario no tiene preferencia, devuelve 'sin preferencia'."
     "5) Devuelve solo el valor, sin explicaciones ni formato extra."
 )
 
@@ -287,8 +290,15 @@ if not("final_json" in st.session_state):
                 f"{OLLAMA_API_URL}/v1/chat/completions",
                 json={"model": MODEL, "messages": messages_to_send}
             )
+            
             normalized_value = response.json()["choices"][0]["message"]["content"].strip().lower()
 
+            if current_field == "provincia_base":
+                normalized_value = validar_provincia(normalized_value, st.session_state.province_month_df["province"])
+
+            elif current_field == "temperatura" and normalized_value == "sin preferencia":
+                    normalized_value = mean_temp()
+            st.text(normalized_value)
             # --- Validación de opciones ---
             field_options = fields_info[current_field]["options"]
             if callable(field_options):
@@ -305,8 +315,8 @@ if not("final_json" in st.session_state):
                     # Ningún valor válido → repreguntar inmediatamente mostrando opciones
                     options_str = ", ".join(field_options_lower)
                     answer = (
-                        f"Disculpa, el valor que ingresaste no es válido. "
-                        f"Por favor elige hasta 3 de las siguientes opciones: {options_str}."
+                        f"Disculpa, no pude entenderte bien. "
+                        f"Estas son las opciones con las que contamos: {options_str}."
                     )
                     # Mantener el campo actual para que el usuario vuelva a responder
                     st.session_state.current_field = current_field
@@ -352,7 +362,7 @@ if not("final_json" in st.session_state):
 
                 options_str = ", ".join(field_options_lower)
                 answer = (
-                    f"Disculpa, la provincia que ingresaste no es válido. "
+                    f"Disculpa, No pude entenderte bien. "
                     f"Por favor elige una de las 52 provincias de españa. "
                 )
                 st.session_state.current_field = current_field
@@ -368,8 +378,8 @@ if not("final_json" in st.session_state):
             elif field_options_lower and normalized_value not in field_options_lower:
                 options_str = ", ".join(field_options_lower)
                 answer = (
-                    f"Disculpa, el valor que ingresaste no es válido. "
-                    f"Por favor elige una opción de las siguientes: {options_str}."
+                    f"Disculpa, no pude entenderte bien. "
+                    f"Estas son las opciones con las que contamos: {options_str}."
                 )
                 st.session_state.current_field = current_field
                 # Mostrar inmediatamente en el chat
@@ -382,6 +392,7 @@ if not("final_json" in st.session_state):
                 st.stop()
 
             else:
+
                 st.session_state.json_data[current_field] = normalized_value
 
                 anio_val = st.session_state.json_data.get("anio")
@@ -415,7 +426,7 @@ if not("final_json" in st.session_state):
 
                 # --- Verificar provincia_base y asignar modo_chat ---
                 if current_field == "provincia_base":
-                    if normalized_value != "none":
+                    if normalized_value != "sin preferencia":
                         st.session_state.json_data["modo_chat"] = "2"
                     else:
                         st.session_state.json_data["modo_chat"] = "1"
@@ -425,7 +436,7 @@ if not("final_json" in st.session_state):
                     for field in fields_info:
                         if field not in st.session_state.json_data:
                             if field in ["tipo_geografia", "temperatura", "tolerancia_multitudes", "tolerancia_lluvia", "presupuesto"]:
-                                st.session_state.json_data[field] = "none"
+                                st.session_state.json_data[field] = "sin preferencia"
                     st.session_state.current_field = None
 
                     st.session_state.final_json = st.session_state.json_data.copy()

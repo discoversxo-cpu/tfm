@@ -96,17 +96,18 @@ def normalize(text: str) -> str:
 
 def validar_provincia(raw_input: str, df_provincias: pd.Series) -> str:
     PROV_ALIASES = {
-        "las palmas": "Palmas, Las",
-        "palmas": "Palmas, Las",
-        "coruna": "Coruña, A",
-        "a coruna": "Coruña, A",
-        "la coruna": "Coruña, A",
-        "baleares": "Balears, Illes",
-        "balears": "Balears, Illes",
-        "islas baleares": "Balears, Illes",
-        "illes balears": "Balears, Illes",
-        "la rioja": "Rioja, La",
-        "rioja": "Rioja, La"
+        "las palmas": "Canarias",
+        "palmas": "Canarias",
+        "islas canarias": "Canarias",
+        "coruna": "Coruña",
+        "a coruna": "Coruña",
+        "la coruna": "Coruña",
+        "baleares": "Islas Baleares",
+        "balears": "Islas Baleares",
+        "illes balears": "Islas Baleares",
+        "balears, illes": "Islas Baleares",
+        "Rioja, La": "Rioja",
+        "la rioja": "Rioja"
     }
     norm_input = normalize(raw_input)
     prov_map = {normalize(p): p for p in df_provincias.unique()}
@@ -258,13 +259,13 @@ def recomendar_alternativas(
     "festivales": "Festivals",
     "gastronomia": "Food",
     "familia": "Family",
-    "none": "none"  # o "UNKNOWN", según prefieras
+    "sin preferencia": "sin preferencia"  # o "UNKNOWN", según prefieras
 }
     event_weights = {}
     selected_event_cols = []
     selected_events = []
 
-    if final_json["preferencias_experiencias"] == "none":
+    if final_json["preferencias_experiencias"] == "sin preferencia":
         event_weights = {"events_total":1.0}
     else:
         cats = final_json["preferencias_experiencias"].split(",")
