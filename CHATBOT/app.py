@@ -194,8 +194,8 @@ fields_info = {
 # --- Normas de normalización por campo ---
 normalization_rules = {
     "anio": (
-        "Busca si la respuesta contiene un año válido (2025 o 2026). "
-        "Si no se puede interpretar, devuelve 'sin preferencia'. "
+        "Busca si en la respuesta el usuario menciona un año. "
+        "Si no contiene ningun año, devuelve 'sin preferencia'. "
         "Devuelve únicamente el año o 'sin preferencia'."),
     "mes": (
         "Busca si la respuesta corresponde a un mes. "
@@ -293,7 +293,8 @@ if not("final_json" in st.session_state):
             
             normalized_value = response.json()["choices"][0]["message"]["content"].strip().lower()
 
-            if current_field == "provincia_base":
+            if current_field == "provincia_base" and normalized_value != "sin preferencia":
+                
                 normalized_value = validar_provincia(normalized_value, st.session_state.province_month_df["province"])
 
             elif current_field == "temperatura" and normalized_value == "sin preferencia":

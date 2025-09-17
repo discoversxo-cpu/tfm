@@ -116,7 +116,7 @@ def validar_provincia(raw_input: str, df_provincias: pd.Series) -> str:
     else:
         for norm_name, official_name in prov_map.items():
             if norm_input in norm_name: return official_name.lower()
-    raise ValueError(f"Provincia '{raw_input}' no encontrada")
+    return raw_input
 
 def _geo_accept_set(t: str) -> set:
     geo_map = {
